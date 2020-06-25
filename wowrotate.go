@@ -22,10 +22,7 @@ var (
 )
 
 func getLogFileInfo() os.FileInfo {
-	if !strings.HasSuffix(logDir, "/") {
-		logDir += "/"
-	}
-	fileinfo, err := os.Stat(logDir + "WoWCombatLog.txt")
+	fileinfo, err := os.Stat(logDir + logName)
 	if err != nil {
 		log.Fatal(err)
 	}
