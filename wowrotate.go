@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,47 +22,60 @@ var (
 	maxSizeMB = int64(1000)
 )
 
-func getLogFileInfo() os.FileInfo {
-	fileinfo, err := os.Stat(logDir + logName)
+func getLogFileInfo() (os.FileInfo, error) {
+	fileinfo, err := os.Stat(filepath.Join(logDir, logName))
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	return fileinfo
+	return fileinfo, nil
 }
 
-func getFileCTime(fi os.FileInfo) time.Time {
+func getFileCTime(fi os.FileInfo) (*time.Time, error) {
 	winData := fi.Sys().(*syscall.Win32FileAttributeData)
-	return time.Unix(0, winData.CreationTime.Nanoseconds())
+	if winData == nil {
+		return nil, fmt.Errorf("unable to read attributes of '%s'", fi.Name())
+	}
+	cTime := time.Unix(0, winData.CreationTime.Nanoseconds())
+	return &cTime, nil
 }
 
-func logRotate(cTime time.Time) error {
+func logRotate(cTime *time.Time) error {
 	fn := strings.Split(logName, ".txt")[0]                                    // Is this robust at all?
 	newFn := fmt.Sprintf("%s_%s.txt", fn, cTime.Format("2006-01-02T15-04-05")) // ISO8601'ish
-	srcPath := logDir + logName
-	destPath := outDir + newFn
+
+	srcPath := filepath.Join(logDir, logName)
+	destPath := filepath.Join(outDir, newFn)
 
 	// Make all parent directories (if necessary)
 	if err := os.MkdirAll(outDir, 0777); err != nil {
 		return err
 	}
 
-	inputFile, err := os.Open(srcPath)
+	inFile, err := os.Open(srcPath)
+	defer inFile.Close()
 	if err != nil {
 		return err
 	}
 
-	outputFile, err := os.Create(destPath)
+	outFile, err := os.Create(destPath)
+	defer outFile.Close() // https://www.joeshaw.org/dont-defer-close-on-writable-files/ Who knows?
 	if err != nil {
 		return err
 	}
 
-	defer outputFile.Close() // Kinda like try..finally: f.close()
-	_, err = io.Copy(outputFile, inputFile)
-	inputFile.Close()
+	// Copy log file to destination directory
+	_, err = io.Copy(outFile, inFile)
 	if err != nil {
 		return err
 	}
 
+	// Close log file after copying, so we can delete it
+	err = inFile.Close()
+	if err != nil {
+		return nil
+	}
+
+	// Delete original log file
 	err = os.Remove(srcPath)
 	if err != nil {
 		return err
@@ -70,35 +84,38 @@ func logRotate(cTime time.Time) error {
 	return nil
 }
 
-func fixPathSuffix(p *string) {
-	// Both forward- and backslashes are fine, but they should not be mixed.
-	if strings.Contains(*p, "/") && !strings.HasSuffix(*p, "/") {
-		*p = *p + "/"
-	} else if strings.Contains(*p, "\\") && !strings.HasSuffix(*p, "\\") {
-		*p = *p + "\\"
-	}
-}
-
 func init() {
-	// TODO: Parse args
 	flag.Int64Var(&maxSizeMB, "s", maxSizeMB, "Max size of WoWCombatLog.txt (in MB)")
 	flag.StringVar(&logDir, "i", logDir, "World of Warcraft Logs folder")
 	flag.StringVar(&outDir, "o", outDir, "Folder to move expired log files to")
 	flag.IntVar(&nDays, "n", nDays, "Maximum file age (in days)")
 	flag.Parse()
-	fixPathSuffix(&logDir)
-	fixPathSuffix(&outDir)
 }
 
-func main() {
-	fileinfo := getLogFileInfo()
-	cTime := getFileCTime(fileinfo)
+func run() error {
+	fileinfo, err := getLogFileInfo()
+	if err != nil {
+		return err
+	}
+
+	cTime, err := getFileCTime(fileinfo)
+	if err != nil {
+		return err
+	}
 
 	maxAge := time.Now().AddDate(0, 0, -nDays)
 	if cTime.Before(maxAge) || fileinfo.Size() > (maxSizeMB*1e6) {
 		err := logRotate(cTime)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
+	}
+	return nil
+}
+
+func main() {
+	err := run()
+	if err != nil {
+		log.Fatal(err)
 	}
 }
