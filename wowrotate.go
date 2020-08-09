@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -39,12 +40,22 @@ func getFileCTime(fi os.FileInfo) (*time.Time, error) {
 	return &cTime, nil
 }
 
-func logRotate(cTime *time.Time) error {
-	fn := strings.Split(logName, ".txt")[0]                                    // Is this robust at all?
-	newFn := fmt.Sprintf("%s_%s.txt", fn, cTime.Format("2006-01-02T15-04-05")) // ISO8601'ish
+// getDestPath constructs the full path of the destination file from a timestamp.
+func getDestPath(cTime *time.Time) (string, error) {
+	fn := strings.Split(logName, filepath.Ext(logName))
+	if len(fn) == 0 {
+		return "", errors.New("filename cannot be empty")
+	}
+	newFn := fmt.Sprintf("%s_%s.txt", fn[0], cTime.Format("2006-01-02T15-04-05")) // ISO8601'ish
+	return filepath.Join(outDir, newFn), nil
+}
 
+func logRotate(cTime *time.Time) error {
 	srcPath := filepath.Join(logDir, logName)
-	destPath := filepath.Join(outDir, newFn)
+	destPath, err := getDestPath(cTime)
+	if err != nil {
+		return err
+	}
 
 	// Make all parent directories (if necessary)
 	if err := os.MkdirAll(outDir, 0777); err != nil {
